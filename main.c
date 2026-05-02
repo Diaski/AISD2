@@ -53,6 +53,21 @@ void tasklist_remove(TaskList *list, int id)
     }
 }
 
+static void insertion_sort(Task *arr, int n, int (*cmp)(const void *, const void *))
+{
+    for (int i = 1; i < n; i++)
+    {
+        Task key = arr[i];
+        int  j   = i - 1;
+        while (j >= 0 && cmp(&arr[j], &key) > 0)
+        {
+            arr[j + 1] = arr[j];
+            j--;
+        }
+        arr[j + 1] = key;
+    }
+}
+
 static int cmp_desc(const void *a, const void *b)
 {
     const Task *ta = a, *tb = b;
@@ -73,7 +88,8 @@ static Task *sorted_copy(const TaskList *list, int (*cmp)(const void *, const vo
 {
     Task *copy = malloc(list->size * sizeof(Task));
     memcpy(copy, list->data, list->size * sizeof(Task));
-    qsort(copy, list->size, sizeof(Task), cmp);
+
+    insertion_sort(copy, list->size, cmp);
     return copy;
 }
 
@@ -139,7 +155,7 @@ static void schedule_core(Task *tasks, int n, int m, int mode)
         }
         for (int mach = 0; mach < m; mach++)
         {
-            qsort(&assigned[mach * n], count[mach], sizeof(Task), cmp_asc);
+            insertion_sort(&assigned[mach * n], count[mach], cmp_asc);
             double cur = 0;
             for (int j = 0; j < count[mach]; j++)
             {
