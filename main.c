@@ -2,6 +2,7 @@
 #include <memory.h>
 #include <stdio.h>
 #include <stdlib.h>
+
 typedef struct
 {
     int    id;
@@ -11,8 +12,7 @@ typedef struct
 typedef struct
 {
     Task *data;
-    int   size;
-    int   capacity;
+    int   size, capacity;
 } TaskList;
 
 typedef struct
@@ -24,19 +24,16 @@ typedef struct
 
 TaskList tasklist_init(int capacity)
 {
-    TaskList list;
-    list.size     = 0;
-    list.capacity = capacity;
-    list.data     = (Task *)calloc(capacity, sizeof(Task));
+    TaskList list = {calloc(capacity, sizeof(Task)), 0, capacity};
     return list;
 }
 
 void tasklist_insert(TaskList *list, int pos, int id, double len)
 {
-    if (list->capacity == list->size)
+    if (list->size == list->capacity)
     {
-        list->data = (Task *)realloc(list->data, list->capacity * 2 * sizeof(Task));
         list->capacity *= 2;
+        list->data = realloc(list->data, list->capacity * sizeof(Task));
     }
     memmove(&list->data[pos + 1], &list->data[pos], (list->size - pos) * sizeof(Task));
     list->data[pos].id  = id;
@@ -44,452 +41,269 @@ void tasklist_insert(TaskList *list, int pos, int id, double len)
     list->size++;
 }
 
-void tasklist_remove_by_id(TaskList *list, int id)
+void tasklist_remove(TaskList *list, int id)
 {
     for (int i = 0; i < list->size; i++)
     {
-        if (list->data[i].id == id)
-        {
-            memmove(&list->data[i], &list->data[i + 1], (list->size - i - 1) * sizeof(Task));
-            list->size--;
-            break;
-        }
+        if (list->data[i].id != id)
+            continue;
+        memmove(&list->data[i], &list->data[i + 1], (list->size - i - 1) * sizeof(Task));
+        list->size--;
+        return;
     }
 }
 
-static int find_earliest_machine(const double *end_time, int m)
+static int cmp_desc(const void *a, const void *b)
+{
+    const Task *ta = a, *tb = b;
+    if (ta->len != tb->len)
+        return (ta->len < tb->len) ? 1 : -1;
+    return tb->id - ta->id;
+}
+
+static int cmp_asc(const void *a, const void *b)
+{
+    const Task *ta = a, *tb = b;
+    if (ta->len != tb->len)
+        return (ta->len > tb->len) ? 1 : -1;
+    return ta->id - tb->id;
+}
+
+static Task *sorted_copy(const TaskList *list, int (*cmp)(const void *, const void *))
+{
+    Task *copy = malloc(list->size * sizeof(Task));
+    memcpy(copy, list->data, list->size * sizeof(Task));
+    qsort(copy, list->size, sizeof(Task), cmp);
+    return copy;
+}
+
+static int earliest_machine(const double *end, int m)
 {
     int best = 0;
     for (int i = 1; i < m; i++)
-        if (end_time[i] < end_time[best])
+        if (end[i] < end[best])
             best = i;
     return best;
 }
 
-void print_result(int machine_count, int *task_count, int l_size, Task *assigned_tasks,
-                  double *completion, double *machine_end)
+static void print_schedule(int m, int *count, int stride, Task *assigned, double *finish,
+                           double *end)
 {
-    double cmax = 0.0, sigma = 0.0;
-    for (int i = 0; i < machine_count; i++)
+    double cmax = 0, sigma = 0;
+    for (int i = 0; i < m; i++)
     {
-        if (machine_end[i] > cmax)
-            cmax = machine_end[i];
-        for (int j = 0; j < task_count[i]; j++)
-        {
-            int id = i * l_size + j;
-            sigma += completion[id];
-        }
+        if (end[i] > cmax)
+            cmax = end[i];
+        for (int j = 0; j < count[i]; j++)
+            sigma += finish[i * stride + j];
     }
     printf("Cmax: %.0f\n", cmax);
     printf("sigmaC: %g\n", sigma);
-
-    for (int i = 0; i < machine_count; i++)
+    for (int i = 0; i < m; i++)
     {
         printf("M%d:", i + 1);
-
-        for (int j = 0; j < task_count[i]; j++)
+        for (int j = 0; j < count[i]; j++)
         {
-            int    index           = i * l_size + j;
-            int    id              = assigned_tasks[index].id;
-            double completion_time = completion[index];
-
-            printf("( C%d = %.0f )", id, completion_time);
+            int idx = i * stride + j;
+            printf("( C%d = %.0f )", assigned[idx].id, finish[idx]);
         }
         printf("\n");
     }
 }
-void schedule_core(Task *tasks, int l_size, int machine_count, int mode)
+
+static void schedule_core(Task *tasks, int n, int m, int mode)
 {
-    double *machine_end    = calloc(machine_count, sizeof(double));
-    int    *task_count     = calloc(machine_count, sizeof(int));
-    Task   *assigned_tasks = calloc((machine_count * l_size), sizeof(Task));
-    double *completion     = calloc((machine_count * l_size), sizeof(double));
+    double *end      = calloc(m, sizeof(double));
+    int    *count    = calloc(m, sizeof(int));
+    Task   *assigned = calloc(m * n, sizeof(Task));
+    double *finish   = calloc(m * n, sizeof(double));
 
     if (mode == 0)
     {
-        for (int i = 0; i < l_size; i++)
+        for (int i = 0; i < n; i++)
         {
-            int machine = find_earliest_machine(machine_end, machine_count);
-
-            double finish        = machine_end[machine] + tasks[i].len;
-            machine_end[machine] = finish;
-
-            int pos = task_count[machine];
-            int id  = machine * l_size + pos;
-
-            assigned_tasks[id] = tasks[i];
-            completion[id]     = finish;
-            task_count[machine]++;
+            int mach = earliest_machine(end, m);
+            end[mach] += tasks[i].len;
+            int idx       = mach * n + count[mach]++;
+            assigned[idx] = tasks[i];
+            finish[idx]   = end[mach];
         }
     }
     else
     {
-        for (int i = 0; i < l_size; i++)
+        for (int i = 0; i < n; i++)
         {
-            int machine = i % machine_count;
-            int pos     = task_count[machine];
-            int id      = machine * l_size + pos;
+            int mach = i % m;
 
-            assigned_tasks[id] = tasks[i];
-            task_count[machine]++;
+            assigned[mach * n + count[mach]++] = tasks[i];
         }
-
-        for (int mach = 0; mach < machine_count; mach++)
+        for (int mach = 0; mach < m; mach++)
         {
-            int count = task_count[mach];
-
-            for (int i = 0; i < count; i++)
+            qsort(&assigned[mach * n], count[mach], sizeof(Task), cmp_asc);
+            double cur = 0;
+            for (int j = 0; j < count[mach]; j++)
             {
-                for (int j = i + 1; j < count; j++)
-                {
-                    int id_part    = mach * l_size;
-                    int prev_id    = id_part + i;
-                    int checked_id = id_part + j;
-
-                    if (assigned_tasks[prev_id].len < assigned_tasks[checked_id].len)
-                    {
-                        continue;
-                    }
-                    if (assigned_tasks[prev_id].len == assigned_tasks[checked_id].len &&
-                        assigned_tasks[prev_id].id < assigned_tasks[checked_id].id)
-                    {
-                        continue;
-                    }
-                    Task tmp                   = assigned_tasks[prev_id];
-                    assigned_tasks[prev_id]    = assigned_tasks[checked_id];
-                    assigned_tasks[checked_id] = tmp;
-                }
+                cur += assigned[mach * n + j].len;
+                finish[mach * n + j] = cur;
             }
-            double current = 0.0;
-            for (int j = 0; j < count; j++)
-            {
-                current += assigned_tasks[mach * l_size + j].len;
-                completion[mach * l_size + j] = current;
-            }
-            machine_end[mach] = current;
+            end[mach] = cur;
         }
     }
 
-    print_result(machine_count, task_count, l_size, assigned_tasks, completion, machine_end);
-
-    free(machine_end);
-    free(task_count);
-    free(assigned_tasks);
-    free(completion);
+    print_schedule(m, count, n, assigned, finish, end);
+    free(end);
+    free(count);
+    free(assigned);
+    free(finish);
 }
 
-void manual_quick_sort(Task *arr, int low, int high)
+void schedule_ls(const TaskList *list, int m) { schedule_core(list->data, list->size, m, 0); }
+
+void schedule_lpt(const TaskList *list, int m)
 {
-    if (low < high)
-    {
-        int  mid   = low + (high - low) / 2;
-        Task pivot = arr[mid];
-
-        int i = low;
-        int j = high;
-
-        while (i <= j)
-        {
-            while ((arr[i].len > pivot.len) || (arr[i].len == pivot.len && arr[i].id > pivot.id))
-            {
-                i++;
-            }
-
-            while ((arr[j].len < pivot.len) || (arr[j].len == pivot.len && arr[j].id < pivot.id))
-            {
-                j--;
-            }
-
-            if (i <= j)
-            {
-                Task tmp = arr[i];
-                arr[i]   = arr[j];
-                arr[j]   = tmp;
-                i++;
-                j--;
-            }
-        }
-
-        if (low < j)
-            manual_quick_sort(arr, low, j);
-        if (i < high)
-            manual_quick_sort(arr, i, high);
-    }
-}
-
-void sort_tasks_descending_by_len(Task *arr, int l_size)
-{
-    if (l_size > 1)
-    {
-        manual_quick_sort(arr, 0, l_size - 1);
-    }
-}
-
-void schedule_list_scheduling(TaskList *list, int machine_count)
-{
-    schedule_core(list->data, list->size, machine_count, 0);
-}
-
-void schedule_longest_processing_time_first(TaskList *list, int machine_count)
-{
-    int   l_size = list->size;
-    Task *sorted = calloc(l_size, sizeof(Task));
-
-    memcpy(sorted, list->data, l_size * sizeof(Task));
-    sort_tasks_descending_by_len(sorted, l_size);
-    schedule_core(sorted, l_size, machine_count, 0);
-
+    Task *sorted = sorted_copy(list, cmp_desc);
+    schedule_core(sorted, list->size, m, 0);
     free(sorted);
 }
 
-void schedule_shortest_processing_time_first(TaskList *list, int machine_count)
+void schedule_spt(const TaskList *list, int m)
 {
-    int l_size = list->size;
-
-    Task *sorted = calloc(l_size, sizeof(Task));
-    memcpy(sorted, list->data, l_size * sizeof(Task));
-    sort_tasks_descending_by_len(sorted, l_size);
-    schedule_core(sorted, l_size, machine_count, 1);
-
+    Task *sorted = sorted_copy(list, cmp_desc);
+    schedule_core(sorted, list->size, m, 1);
     free(sorted);
 }
-void b(TaskList *list, int machine_count)
-{
-    schedule_core(list->data, list->size, machine_count, 0);
-}
 
-void l(TaskList *list, int machine_count)
+void schedule_mcnaughton(const TaskList *list, int m)
 {
-    int   l_size     = list->size;
-    Task *temp_tasks = calloc(l_size, sizeof(Task));
-    Task  temp_task;
-
-    memcpy(temp_tasks, list->data, machine_count * sizeof(Task));
-    for (int i = 0; i < l_size - 1; i++)
+    int    n   = list->size;
+    double sum = 0, max_len = 0;
+    for (int i = 0; i < n; i++)
     {
-        int best = i;
-        for (int j = i + 1; j < l_size; j++)
-        {
-            if (temp_tasks[j].len > temp_tasks[best].len)
-            {
-                best = j;
-            }
-            else if (temp_tasks[j].len == temp_tasks[best].len &&
-                     temp_tasks[j].id > temp_tasks[best].id)
-            {
-                best = j;
-            }
-        }
-        temp_task        = temp_tasks[i];
-        temp_tasks[i]    = temp_tasks[best];
-        temp_tasks[best] = temp_task;
-    }
-    schedule_core(temp_tasks, l_size, machine_count, 0);
-    free(temp_tasks);
-}
-
-void s(TaskList *list, int machine_count)
-{
-    int   l_size     = list->size;
-    Task *temp_tasks = calloc(l_size, sizeof(Task));
-    memcpy(temp_tasks, list->data, l_size * sizeof(Task));
-
-    for (int i = 0; i < l_size - 1; i++)
-    {
-        int best = i;
-        for (int j = i + 1; j < l_size; j++)
-        {
-            if (temp_tasks[j].len > temp_tasks[best].len)
-            {
-                best = j;
-            }
-            else if (temp_tasks[j].len == temp_tasks[best].len &&
-                     temp_tasks[j].id > temp_tasks[best].id)
-            {
-                best = j;
-            }
-        }
-        Task tmp         = temp_tasks[i];
-        temp_tasks[i]    = temp_tasks[best];
-        temp_tasks[best] = tmp;
-    }
-
-    schedule_core(temp_tasks, l_size, machine_count, 1);
-    free(temp_tasks);
-}
-
-void m(const TaskList *list, int machine_count)
-{
-    int    l_size  = list->size;
-    double sum_len = 0.0;
-    double max_len = 0.0;
-
-    for (int i = 0; i < l_size; i++)
-    {
-        sum_len += list->data[i].len;
+        sum += list->data[i].len;
         if (list->data[i].len > max_len)
             max_len = list->data[i].len;
     }
+    double cmax = (sum / m > max_len) ? sum / m : max_len;
 
-    double cmax = sum_len / machine_count;
-    if (max_len > cmax)
-        cmax = max_len;
-
-    Fragment **sched      = calloc(machine_count, sizeof(Fragment *));
-    int       *task_count = calloc(machine_count, sizeof(int));
-
-    for (int i = 0; i < machine_count; i++)
-    {
-        sched[i] = calloc(l_size + machine_count, sizeof(Fragment));
-    }
+    int       *count = calloc(m, sizeof(int));
+    Fragment **sched = calloc(m, sizeof(Fragment *));
+    for (int i = 0; i < m; i++)
+        sched[i] = calloc(n + m, sizeof(Fragment));
 
     int max_id = 0;
-    for (int i = 0; i < l_size; i++)
+    for (int i = 0; i < n; i++)
         if (list->data[i].id > max_id)
             max_id = list->data[i].id;
-    double *completion_times = calloc(max_id + 1, sizeof(double));
+    double *comp = calloc(max_id + 1, sizeof(double));
 
-    int    cur_m    = 0;
-    double cur_time = 0.0;
+    int          cur_m = 0;
+    double       cur_t = 0;
+    const double eps   = 1e-9;
 
-    for (int i = 0; i < l_size; i++)
+    for (int i = 0; i < n; i++)
     {
-        Task   t         = list->data[i];
-        double remaining = t.len;
-        int    was_split = 0;
-        double eps       = 1e-9;
-        while (remaining > eps)
+        Task   t     = list->data[i];
+        double rem   = t.len;
+        int    split = 0;
+
+        while (rem > eps)
         {
-            if (cur_m >= machine_count)
+            if (cur_m >= m)
                 break;
-
-            double space = cmax - cur_time;
-
+            double space = cmax - cur_t;
             if (space <= eps)
             {
                 cur_m++;
-                cur_time = 0;
+                cur_t = 0;
                 continue;
             }
 
-            if (remaining <= space)
+            Fragment frag;
+            if (rem <= space)
             {
-                cur_time += remaining;
+                cur_t += rem;
 
-                char label = was_split ? 'P' : 'C';
+                frag.id   = t.id;
+                frag.type = split ? 'P' : 'C';
+                frag.time = cur_t;
 
-                if (task_count[cur_m] < (l_size + machine_count))
-                {
-                    sched[cur_m][task_count[cur_m]].time = cur_time;
-                    sched[cur_m][task_count[cur_m]].type = label;
-                    sched[cur_m][task_count[cur_m]].id   = t.id;
-                    task_count[cur_m]++;
-                }
-
-                if (!was_split)
-                {
-                    completion_times[t.id] = cur_time;
-                }
-
-                remaining = 0.0;
+                sched[cur_m][count[cur_m]++] = frag;
+                if (!split)
+                    comp[t.id] = cur_t;
+                rem = 0;
             }
             else
             {
-                if (task_count[cur_m] < (l_size + machine_count))
-                {
-                    sched[cur_m][task_count[cur_m]].time = cmax;
-                    sched[cur_m][task_count[cur_m]].type = 'C';
-                    sched[cur_m][task_count[cur_m]].id   = t.id;
-                    task_count[cur_m]++;
-                }
 
-                completion_times[t.id] = cmax;
+                frag.id   = t.id;
+                frag.time = cmax;
+                frag.type = 'C';
 
-                remaining -= space;
+                sched[cur_m][count[cur_m]++] = frag;
+                comp[t.id]                   = cmax;
+                rem -= space;
                 cur_m++;
-                cur_time  = 0;
-                was_split = 1;
+                cur_t = 0;
+                split = 1;
             }
         }
     }
 
-    double sigmaC = 0;
-    for (int i = 0; i < l_size; i++)
-    {
-        int task_id = list->data[i].id;
-        sigmaC += completion_times[task_id];
-    }
+    double sigma = 0;
+    for (int i = 0; i < n; i++)
+        sigma += comp[list->data[i].id];
 
     printf("Cmax: %g\n", cmax);
-    printf("sigmaC: %g\n", sigmaC);
-
-    for (int i = 0; i < machine_count; i++)
+    printf("sigmaC: %g\n", sigma);
+    for (int i = 0; i < m; i++)
     {
         printf("M%d:", i + 1);
-        for (int j = 0; j < task_count[i]; j++)
-        {
+        for (int j = 0; j < count[i]; j++)
             printf("( %c%d = %g )", sched[i][j].type, sched[i][j].id, sched[i][j].time);
-        }
         printf("\n");
-    }
-
-    for (int i = 0; i < machine_count; i++)
         free(sched[i]);
+    }
     free(sched);
-    free(task_count);
-    free(completion_times);
+    free(count);
+    free(comp);
 }
 
-void find_optimal_cmax(Task *tasks, int list_size, int task_idx, int machine_count,
-                       double *machine_end, double *best_cmax)
+static void find_optimal(Task *tasks, int n, int idx, int m, double *end, double *best)
 {
-
-    for (int i = 0; i < machine_count; i++)
-    {
-        if (machine_end[i] >= *best_cmax)
-        {
+    for (int i = 0; i < m; i++)
+        if (end[i] >= *best)
             return;
-        }
-    }
 
-    if (task_idx == list_size)
+    if (idx == n)
     {
-        double current_cmax = 0.0;
-        for (int i = 0; i < machine_count; i++)
-        {
-            if (machine_end[i] > current_cmax)
-            {
-                current_cmax = machine_end[i];
-            }
-        }
-
-        if (current_cmax < *best_cmax)
-        {
-            *best_cmax = current_cmax;
-        }
+        double cmax = 0;
+        for (int i = 0; i < m; i++)
+            if (end[i] > cmax)
+                cmax = end[i];
+        if (cmax < *best)
+            *best = cmax;
         return;
     }
-
-    for (int i = 0; i < machine_count; i++)
+    for (int i = 0; i < m; i++)
     {
-        machine_end[i] += tasks[task_idx].len;
-        find_optimal_cmax(tasks, list_size, task_idx + 1, machine_count, machine_end, best_cmax);
-        machine_end[i] -= tasks[task_idx].len;
+        end[i] += tasks[idx].len;
+        find_optimal(tasks, n, idx + 1, m, end, best);
+        end[i] -= tasks[idx].len;
     }
 }
 
-void a(const TaskList *list, int machine_count)
+void schedule_optimal(const TaskList *list, int m)
 {
-    double  best_cmax   = DBL_MAX;
-    double *machine_end = calloc(machine_count, sizeof(double));
-    find_optimal_cmax(list->data, list->size, 0, machine_count, machine_end, &best_cmax);
-    printf("Copt: %g\n", best_cmax);
-    free(machine_end);
+    double  best = DBL_MAX;
+    double *end  = calloc(m, sizeof(double));
+    find_optimal(list->data, list->size, 0, m, end, &best);
+    printf("Copt: %g\n", best);
+    free(end);
 }
 
-int main()
+int main(void)
 {
-    int n = 0;
+    int n;
     if (scanf(" %d", &n) == EOF)
         return 0;
 
@@ -498,67 +312,54 @@ int main()
 
     for (int i = 0; i < n; i++)
     {
-        double t_len;
-        scanf(" %lf", &t_len);
-        tasklist_insert(&tasks, i, next_id++, t_len);
+        double len;
+        scanf(" %lf", &len);
+        tasklist_insert(&tasks, i, next_id++, len);
     }
 
-    char command;
-    while (scanf(" %c", &command) != EOF)
+    char cmd;
+    while (scanf(" %c", &cmd) != EOF)
     {
-        switch (command)
+        int m;
+        switch (cmd)
         {
-        case ('+'):
+        case '+':
         {
             int k, p;
             scanf(" %d %d", &k, &p);
             tasklist_insert(&tasks, k - 1, next_id++, (double)p);
             break;
         }
-        case ('-'):
+        case '-':
         {
             int id;
             scanf(" %d", &id);
-            tasklist_remove_by_id(&tasks, id);
+            tasklist_remove(&tasks, id);
             break;
         }
-        case ('B'):
-        {
-            int machine_count;
-            scanf(" %d", &machine_count);
-            schedule_list_scheduling(&tasks, machine_count);
+        case 'B':
+            scanf(" %d", &m);
+            schedule_ls(&tasks, m);
             break;
-        }
-        case ('L'):
-        {
-            int machine_count;
-            scanf(" %d", &machine_count);
-            schedule_longest_processing_time_first(&tasks, machine_count);
+        case 'L':
+            scanf(" %d", &m);
+            schedule_lpt(&tasks, m);
             break;
-        }
-        case ('S'):
-        {
-            int machine_count;
-            scanf(" %d", &machine_count);
-            schedule_shortest_processing_time_first(&tasks, machine_count);
+        case 'S':
+            scanf(" %d", &m);
+            schedule_spt(&tasks, m);
             break;
-        }
-        case ('M'):
-        {
-            int machine_count;
-            scanf(" %d", &machine_count);
-            m(&tasks, machine_count);
+        case 'M':
+            scanf(" %d", &m);
+            schedule_mcnaughton(&tasks, m);
             break;
-        }
-        case ('A'):
-        {
-            int machine_count;
-            scanf(" %d", &machine_count);
-            a(&tasks, machine_count);
+        case 'A':
+            scanf(" %d", &m);
+            schedule_optimal(&tasks, m);
             break;
-        }
         }
     }
+
     free(tasks.data);
     return 0;
 }
