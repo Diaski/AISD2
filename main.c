@@ -81,7 +81,7 @@ void print_result(int machine_count, int *task_count, int l_size, Task *assigned
         }
     }
     printf("Cmax: %.0f\n", cmax);
-    printf("sigmaC: %.0f\n", sigma);
+    printf("sigmaC: %g\n", sigma);
 
     for (int i = 0; i < machine_count; i++)
     {
@@ -178,23 +178,50 @@ void schedule_core(Task *tasks, int l_size, int machine_count, int mode)
     free(completion);
 }
 
-void sort_tasks_descending_by_len(Task *arr, int l_size)
+void manual_quick_sort(Task *arr, int low, int high)
 {
-    Task tmp;
-    for (int i = 0; i < l_size - 1; i++)
+    if (low < high)
     {
-        int best = i;
-        for (int j = i + 1; j < l_size; j++)
+        int  mid   = low + (high - low) / 2;
+        Task pivot = arr[mid];
+
+        int i = low;
+        int j = high;
+
+        while (i <= j)
         {
-            if (arr[j].len > arr[best].len ||
-                (arr[j].len == arr[best].len && arr[j].id > arr[best].id))
+            while ((arr[i].len > pivot.len) || (arr[i].len == pivot.len && arr[i].id < pivot.id))
             {
-                best = j;
+                i++;
+            }
+
+            while ((arr[j].len < pivot.len) || (arr[j].len == pivot.len && arr[j].id > pivot.id))
+            {
+                j--;
+            }
+
+            if (i <= j)
+            {
+                Task tmp = arr[i];
+                arr[i]   = arr[j];
+                arr[j]   = tmp;
+                i++;
+                j--;
             }
         }
-        tmp       = arr[i];
-        arr[i]    = arr[best];
-        arr[best] = tmp;
+
+        if (low < j)
+            manual_quick_sort(arr, low, j);
+        if (i < high)
+            manual_quick_sort(arr, i, high);
+    }
+}
+
+void sort_tasks_descending_by_len(Task *arr, int l_size)
+{
+    if (l_size > 1)
+    {
+        manual_quick_sort(arr, 0, l_size - 1);
     }
 }
 
