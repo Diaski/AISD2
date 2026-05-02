@@ -190,12 +190,12 @@ void manual_quick_sort(Task *arr, int low, int high)
 
         while (i <= j)
         {
-            while ((arr[i].len > pivot.len) || (arr[i].len == pivot.len && arr[i].id < pivot.id))
+            while ((arr[i].len > pivot.len) || (arr[i].len == pivot.len && arr[i].id > pivot.id))
             {
                 i++;
             }
 
-            while ((arr[j].len < pivot.len) || (arr[j].len == pivot.len && arr[j].id > pivot.id))
+            while ((arr[j].len < pivot.len) || (arr[j].len == pivot.len && arr[j].id < pivot.id))
             {
                 j--;
             }
