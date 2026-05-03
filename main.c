@@ -1,5 +1,6 @@
 #include <float.h>
 #include <memory.h>
+#include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
 
@@ -22,6 +23,13 @@ typedef struct
     char   type;
 } Fragment;
 
+typedef struct
+{
+    Task *data;
+    int   size;
+    bool  dirty;
+} SortedCache;
+
 TaskList tasklist_init(int capacity)
 {
     TaskList list;
@@ -31,7 +39,7 @@ TaskList tasklist_init(int capacity)
     return list;
 }
 
-void tasklist_insert(TaskList *list, int pos, int id, double len)
+void tasklist_insert(TaskList *list, SortedCache *cache, int pos, int id, double len)
 {
     if (list->size == list->capacity)
     {
@@ -42,9 +50,10 @@ void tasklist_insert(TaskList *list, int pos, int id, double len)
     list->data[pos].id  = id;
     list->data[pos].len = len;
     list->size++;
+    cache->dirty = true;
 }
 
-void tasklist_remove(TaskList *list, int id)
+void tasklist_remove(TaskList *list, SortedCache *cache, int id)
 {
     for (int i = 0; i < list->size; i++)
     {
@@ -52,6 +61,7 @@ void tasklist_remove(TaskList *list, int id)
             continue;
         memmove(&list->data[i], &list->data[i + 1], (list->size - i - 1) * sizeof(Task));
         list->size--;
+        cache->dirty = true;
         return;
     }
 }
@@ -87,13 +97,18 @@ static int cmp_asc(const void *a, const void *b)
     return ta->id - tb->id;
 }
 
-static Task *sorted_copy(const TaskList *list, int (*cmp)(const void *, const void *))
+static Task *ensure_sorted(SortedCache *cache, const TaskList *list)
 {
-    Task *copy = malloc(list->size * sizeof(Task));
-    memcpy(copy, list->data, list->size * sizeof(Task));
+    if (!cache->dirty)
+        return cache->data;
 
-    insertion_sort(copy, list->size, cmp);
-    return copy;
+    free(cache->data);
+    cache->size = list->size;
+    cache->data = calloc(list->size, sizeof(Task));
+    memcpy(cache->data, list->data, list->size * sizeof(Task));
+    insertion_sort(cache->data, cache->size, cmp_desc);
+    cache->dirty = false;
+    return cache->data;
 }
 
 static int earliest_machine(const double *end, int m)
@@ -152,8 +167,7 @@ static void schedule_core(Task *tasks, int n, int m, int mode)
     {
         for (int i = 0; i < n; i++)
         {
-            int mach = i % m;
-
+            int mach                           = i % m;
             assigned[mach * n + count[mach]++] = tasks[i];
         }
         for (int mach = 0; mach < m; mach++)
@@ -178,19 +192,9 @@ static void schedule_core(Task *tasks, int n, int m, int mode)
 
 void schedule_ls(const TaskList *list, int m) { schedule_core(list->data, list->size, m, 0); }
 
-void schedule_lpt(const TaskList *list, int m)
-{
-    Task *sorted = sorted_copy(list, cmp_desc);
-    schedule_core(sorted, list->size, m, 0);
-    free(sorted);
-}
+void schedule_lpt(Task *sorted, int n, int m) { schedule_core(sorted, n, m, 0); }
 
-void schedule_spt(const TaskList *list, int m)
-{
-    Task *sorted = sorted_copy(list, cmp_desc);
-    schedule_core(sorted, list->size, m, 1);
-    free(sorted);
-}
+void schedule_spt(Task *sorted, int n, int m) { schedule_core(sorted, n, m, 1); }
 
 void schedule_mcnaughton(const TaskList *list, int m)
 {
@@ -242,11 +246,9 @@ void schedule_mcnaughton(const TaskList *list, int m)
             if (rem <= space)
             {
                 cur_t += rem;
-
-                frag.id   = t.id;
-                frag.type = split ? 'P' : 'C';
-                frag.time = cur_t;
-
+                frag.id                      = t.id;
+                frag.type                    = split ? 'P' : 'C';
+                frag.time                    = cur_t;
                 sched[cur_m][count[cur_m]++] = frag;
                 if (!split)
                     comp[t.id] = cur_t;
@@ -254,11 +256,9 @@ void schedule_mcnaughton(const TaskList *list, int m)
             }
             else
             {
-
-                frag.id   = t.id;
-                frag.time = cmax;
-                frag.type = 'C';
-
+                frag.id                      = t.id;
+                frag.time                    = cmax;
+                frag.type                    = 'C';
                 sched[cur_m][count[cur_m]++] = frag;
                 comp[t.id]                   = cmax;
                 rem -= space;
@@ -327,14 +327,18 @@ int main(void)
     if (scanf(" %d", &n) == EOF)
         return 0;
 
-    TaskList tasks   = tasklist_init(n);
-    int      next_id = 1;
+    TaskList    tasks = tasklist_init(n);
+    SortedCache cache;
+    cache.data  = NULL;
+    cache.size  = 0;
+    cache.dirty = true;
+    int next_id = 1;
 
     for (int i = 0; i < n; i++)
     {
         double len;
         scanf(" %lf", &len);
-        tasklist_insert(&tasks, i, next_id++, len);
+        tasklist_insert(&tasks, &cache, i, next_id++, len);
     }
 
     char cmd;
@@ -347,14 +351,14 @@ int main(void)
         {
             int k, p;
             scanf(" %d %d", &k, &p);
-            tasklist_insert(&tasks, k - 1, next_id++, (double)p);
+            tasklist_insert(&tasks, &cache, k - 1, next_id++, (double)p);
             break;
         }
         case '-':
         {
             int id;
             scanf(" %d", &id);
-            tasklist_remove(&tasks, id);
+            tasklist_remove(&tasks, &cache, id);
             break;
         }
         case 'B':
@@ -363,11 +367,11 @@ int main(void)
             break;
         case 'L':
             scanf(" %d", &m);
-            schedule_lpt(&tasks, m);
+            schedule_lpt(ensure_sorted(&cache, &tasks), cache.size, m);
             break;
         case 'S':
             scanf(" %d", &m);
-            schedule_spt(&tasks, m);
+            schedule_spt(ensure_sorted(&cache, &tasks), cache.size, m);
             break;
         case 'M':
             scanf(" %d", &m);
@@ -381,5 +385,6 @@ int main(void)
     }
 
     free(tasks.data);
+    free(cache.data);
     return 0;
 }
