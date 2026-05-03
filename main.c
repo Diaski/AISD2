@@ -110,7 +110,6 @@ static Task *ensure_sorted(SortedCache *cache, const TaskList *list)
     cache->dirty = false;
     return cache->data;
 }
-
 static int earliest_machine(const double *end, int m)
 {
     int best = 0;
@@ -366,13 +365,19 @@ int main(void)
             schedule_ls(&tasks, m);
             break;
         case 'L':
+        {
             scanf(" %d", &m);
-            schedule_lpt(ensure_sorted(&cache, &tasks), cache.size, m);
+            Task *sorted = ensure_sorted(&cache, &tasks);
+            schedule_lpt(sorted, cache.size, m);
             break;
+        }
         case 'S':
+        {
             scanf(" %d", &m);
-            schedule_spt(ensure_sorted(&cache, &tasks), cache.size, m);
+            Task *sorted = ensure_sorted(&cache, &tasks);
+            schedule_spt(sorted, cache.size, m);
             break;
+        }
         case 'M':
             scanf(" %d", &m);
             schedule_mcnaughton(&tasks, m);
