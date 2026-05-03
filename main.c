@@ -24,7 +24,10 @@ typedef struct
 
 TaskList tasklist_init(int capacity)
 {
-    TaskList list = {calloc(capacity, sizeof(Task)), 0, capacity};
+    TaskList list;
+    list.data     = calloc(capacity, sizeof(Task));
+    list.size     = 0;
+    list.capacity = capacity;
     return list;
 }
 
@@ -227,6 +230,7 @@ void schedule_mcnaughton(const TaskList *list, int m)
             if (cur_m >= m)
                 break;
             double space = cmax - cur_t;
+
             if (space <= eps)
             {
                 cur_m++;
