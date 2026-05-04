@@ -66,19 +66,46 @@ void tasklist_remove(TaskList *list, SortedCache *cache, int id)
     }
 }
 
-static void insertion_sort(Task *arr, int n, int (*cmp)(const void *, const void *))
+static void swap_tasks(Task *a, Task *b)
 {
-    for (int i = 1; i < n; i++)
+    Task temp = *a;
+    *a        = *b;
+    *b        = temp;
+}
+
+static int partition(Task *arr, int low, int high, int (*cmp)(const void *, const void *))
+{
+    Task pivot = arr[high];
+    int  i     = (low - 1);
+
+    for (int j = low; j <= high - 1; j++)
     {
-        Task key = arr[i];
-        int  j   = i - 1;
-        while (j >= 0 && cmp(&arr[j], &key) > 0)
+        if (cmp(&arr[j], &pivot) < 0)
         {
-            arr[j + 1] = arr[j];
-            j--;
+            i++;
+            swap_tasks(&arr[i], &arr[j]);
         }
-        arr[j + 1] = key;
     }
+    swap_tasks(&arr[i + 1], &arr[high]);
+    return (i + 1);
+}
+
+static void quick_sort_recursive(Task *arr, int low, int high,
+                                 int (*cmp)(const void *, const void *))
+{
+    if (low < high)
+    {
+        int pi = partition(arr, low, high, cmp);
+        quick_sort_recursive(arr, low, pi - 1, cmp);
+        quick_sort_recursive(arr, pi + 1, high, cmp);
+    }
+}
+
+static void quick_sort(Task *arr, int n, int (*cmp)(const void *, const void *))
+{
+    if (n <= 1)
+        return;
+    quick_sort_recursive(arr, 0, n - 1, cmp);
 }
 
 static int cmp_desc(const void *a, const void *b)
@@ -106,10 +133,13 @@ static Task *ensure_sorted(SortedCache *cache, const TaskList *list)
     cache->size = list->size;
     cache->data = calloc(list->size, sizeof(Task));
     memcpy(cache->data, list->data, list->size * sizeof(Task));
-    insertion_sort(cache->data, cache->size, cmp_desc);
+
+    quick_sort(cache->data, cache->size, cmp_desc);
+
     cache->dirty = false;
     return cache->data;
 }
+
 static int earliest_machine(const double *end, int m)
 {
     int best = 0;
@@ -171,7 +201,8 @@ static void schedule_core(Task *tasks, int n, int m, int mode)
         }
         for (int mach = 0; mach < m; mach++)
         {
-            insertion_sort(&assigned[mach * n], count[mach], cmp_asc);
+            quick_sort(&assigned[mach * n], count[mach], cmp_asc);
+
             double cur = 0;
             for (int j = 0; j < count[mach]; j++)
             {
@@ -190,9 +221,7 @@ static void schedule_core(Task *tasks, int n, int m, int mode)
 }
 
 void schedule_ls(const TaskList *list, int m) { schedule_core(list->data, list->size, m, 0); }
-
 void schedule_lpt(Task *sorted, int n, int m) { schedule_core(sorted, n, m, 0); }
-
 void schedule_spt(Task *sorted, int n, int m) { schedule_core(sorted, n, m, 1); }
 
 void schedule_mcnaughton(const TaskList *list, int m)
